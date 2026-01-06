@@ -17,7 +17,7 @@ for ticker in IDX_TICKERS:
 df = pd.DataFrame(results)
 
 if not df.empty:
-    df = df.sort_values("avg_volume", ascending=False)
+    df = df.sort_values("close", ascending=False)
     df.to_csv("results.csv", index=False)
     print("\nTop Results:")
     print(df.head(5))

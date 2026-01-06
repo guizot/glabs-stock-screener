@@ -1,18 +1,7 @@
 import yfinance as yf
 import pandas as pd
 
-DEBUG = True
-
-
-def format_volume(n: float) -> str:
-    n = int(n)
-    if n >= 1_000_000_000:
-        return f"{n / 1_000_000_000:.2f}B"
-    if n >= 1_000_000:
-        return f"{n / 1_000_000:.1f}M"
-    if n >= 1_000:
-        return f"{n / 1_000:.1f}K"
-    return str(n)
+DEBUG = False
 
 
 def _normalize_df(df):
@@ -25,7 +14,7 @@ def screen_stock(ticker):
     try:
         df = yf.download(
             ticker,
-            period="3mo",
+            period="4mo",
             interval="1d",
             progress=False,
             threads=False,
@@ -36,57 +25,52 @@ def screen_stock(ticker):
 
         df = _normalize_df(df)
 
-        if not {"Close", "Volume"}.issubset(df.columns):
+        required = {"Open", "High", "Close", "Volume"}
+        if not required.issubset(df.columns):
             return None
 
-        if len(df) < 25:
-            if DEBUG:
-                print(f"[DEBUG] {ticker}: insufficient data ({len(df)} rows)")
+        if len(df) < 60:
             return None
 
         close = df["Close"]
         volume = df["Volume"]
 
-        # ─────────────────────────────
-        # Indicators
-        # ─────────────────────────────
-        avg_volume = volume.rolling(20).mean().iloc[-1]
+        # ───────────── Indicators ─────────────
         ma20 = close.rolling(20).mean().iloc[-1]
+        ma50 = close.rolling(50).mean().iloc[-1]
+        vol_ma20 = volume.rolling(20).mean().iloc[-1]
 
         last_close = close.iloc[-1]
-        close_5d_ago = close.iloc[-6]
+        prev_close = close.iloc[-2]
+        volume_today = volume.iloc[-1]
+        prev_volume = volume.iloc[-2]
 
-        if pd.isna(avg_volume) or pd.isna(ma20):
+        if any(pd.isna(x) for x in [ma20, ma50, vol_ma20]):
             return None
 
-        # ─────────────────────────────
-        # RULES
-        # ─────────────────────────────
-        rules = {
-            "liquidity": avg_volume > 100_000_000,
-            "trend": last_close > ma20,
-            "price_filter": last_close > 50,
-            "momentum": last_close > close_5d_ago,
-        }
+        value_today = last_close * volume_today
 
-        if DEBUG:
-            print(
-                f"[DEBUG] {ticker} | "
-                f"Vol={format_volume(avg_volume)} | "
-                f"Close={last_close:.2f} | "
-                f"MA20={ma20:.2f} | "
-                f"Rules={rules}"
-            )
+        # ───────────── RULES (FROM IMAGE) ─────────────
+        rules = {
+            "price_min_100": last_close >= 100,
+            "value_min_5b": value_today >= 5_000_000_000,
+            "volume_min_10m": volume_today >= 10_000_000,
+            "price_above_ma20": last_close >= ma20,
+            "ma20_above_ma50": ma20 > ma50,
+            "volume_spike": volume_today > 1.5 * prev_volume,
+            "price_gap_8pct": last_close > 1.08 * prev_close,
+            "volume_above_ma20": volume_today > vol_ma20,
+        }
 
         if all(rules.values()):
             return {
                 "ticker": ticker,
-                "avg_volume": int(avg_volume),
-                "avg_volume_fmt": format_volume(avg_volume),
-                "last_close": round(last_close, 2),
+                "close": round(last_close, 2),
                 "ma20": round(ma20, 2),
-                "momentum_5d": round(last_close - close_5d_ago, 2),
-                # "reason": "High Volume + Uptrend + Momentum",
+                "ma50": round(ma50, 2),
+                "volume_today": int(volume_today),
+                "value_today": int(value_today),
+                "price_change_pct": round((last_close / prev_close - 1) * 100, 2),
             }
 
     except Exception as e:
